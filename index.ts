@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { load } from "ts-dotenv";
-import { Client, Collection, Events, GatewayIntentBits, Interaction } from "discord.js";
+import { AutocompleteInteraction, ChatInputCommandInteraction, Client, Collection, Events, GatewayIntentBits, Interaction, SlashCommandBuilder, SlashCommandOptionsOnlyBuilder } from "discord.js";
 
 // Load environment variables
 const env = load({
@@ -9,11 +9,17 @@ const env = load({
 	CLIENT_ID: String
 });
 
+interface Command {
+	data: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder;
+	execute(interaction: ChatInputCommandInteraction): Promise<void>;
+	autocomplete?(interaction: AutocompleteInteraction): Promise<void>;
+}
+
 // Create a new client instance
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 // Create a collection for your commands
-const commands = new Collection<string, any>();
+const commands = new Collection<string, Command>();
 const foldersPath = path.join(__dirname, "commands");
 const commandFolders = fs.readdirSync(foldersPath);
 
@@ -36,23 +42,41 @@ for (const folder of commandFolders) {
 }
 
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
-	if (!interaction.isChatInputCommand()) return;
+	if (interaction.isChatInputCommand()) {
+		const command = commands.get(interaction.commandName);
 
-	const command = commands.get(interaction.commandName);
+		if (!command) {
+			console.error(`No command matching ${interaction.commandName} was found.`);
+			return;
+		}
 
-	if (!command) {
-		console.error(`No command matching ${interaction.commandName} was found.`);
-		return;
-	}
+		try {
+			await command.execute(interaction);
+		} catch (error) {
+			console.error(error);
+			if (interaction.replied || interaction.deferred) {
+				await interaction.followUp({ content: "There was an error while executing this command!", ephemeral: true });
+			} else {
+				await interaction.reply({ content: "There was an error while executing this command!", ephemeral: true });
+			}
+		}
+	} else if (interaction.isAutocomplete()) {
+		const command = commands.get(interaction.commandName);
 
-	try {
-		await command.execute(interaction);
-	} catch (error) {
-		console.error(error);
-		if (interaction.replied || interaction.deferred) {
-			await interaction.followUp({ content: "There was an error while executing this command!", ephemeral: true });
-		} else {
-			await interaction.reply({ content: "There was an error while executing this command!", ephemeral: true });
+		if (!command) {
+			console.error(`No command matching ${interaction.commandName} was found.`);
+			return;
+		}
+
+		try {
+			if (!command.autocomplete) {
+				console.error(`No autocomplete function found for command ${interaction.commandName}.`);
+				return;
+			}
+
+			await command.autocomplete(interaction);
+		} catch (error) {
+			console.error(error);
 		}
 	}
 });
